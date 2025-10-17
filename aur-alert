@@ -1,0 +1,53 @@
+#!/bin/bash
+
+# Associative array of repositories and their corresponding PKGBUILD paths
+declare -A REPOS
+REPOS=(
+    ["kabiiQ/BeatmapExporter"]="$HOME/git/AUR/beatmapexporter/beatmapexporter-bin/PKGBUILD"
+#   ["anotherUser/anotherRepo"]="$HOME/git/anotherRepo/PKGBUILD"
+#   ["exampleUser/exampleRepo"]="$HOME/git/exampleRepo/PKGBUILD"
+)
+
+PKGVER_REGEX='^pkgver=([0-9.]+)'
+
+# Loop through each repository
+for REPO in "${!REPOS[@]}"; do
+    PKGBUILD_PATH="${REPOS[$REPO]}"
+    echo "Checking repository: $REPO"
+
+    # Variables specific to the repository
+    API_URL="https://api.github.com/repos/$REPO/releases/latest"
+
+    # Check if PKGBUILD exists for the current repository
+    if [ ! -f "$PKGBUILD_PATH" ]; then
+        echo "Error: PKGBUILD file not found at $PKGBUILD_PATH for $REPO."
+        notify-send "PKGBUILD Error!" "Error: PKGBUILD file not found at $PKGBUILD_PATH for $REPO."
+        continue
+    fi
+
+    # Extract & Validate pkgver from PKGBUILD
+    pkgver=v$(grep -E "$PKGVER_REGEX" "$PKGBUILD_PATH" | sed -E "s/$PKGVER_REGEX/\1/")
+    if [ -z "$pkgver" ]; then
+        echo "Error: Unable to extract pkgver from $PKGBUILD_PATH for $REPO."
+        notify-send "PKGBUILD Error!" "Error: Unable to extract pkgver from $PKGBUILD_PATH for $REPO."
+        continue
+    fi
+
+    # Fetch the latest release version from GitHub
+    latest_version=$(curl -s "$API_URL" | grep -oP '"tag_name":\s*"\K[^"]+')
+
+    # Check if the version was fetched
+    if [ -z "$latest_version" ]; then
+        echo "Error: Could not fetch the latest release version from GitHub for $REPO."
+        notify-send "PKGBUILD Error!" "Error: Could not fetch the latest release version from GitHub for $REPO."
+        continue
+    fi
+
+    # Compare versions
+    if [ "$pkgver" != "$latest_version" ]; then
+        echo "Update needed! PKGBUILD version: $pkgver, Latest release: $latest_version for $REPO"
+        notify-send "PKGBUILD Update" "Repository: $REPO\nPKGBUILD: $pkgver, Latest: $latest_version"
+    else
+        echo "PKGBUILD is up-to-date. Version: $pkgver for $REPO"
+    fi
+done

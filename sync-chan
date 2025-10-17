@@ -63,8 +63,9 @@
 #
 
 set -euo pipefail
+trap 'echo -e "\n\e[1;31m!!\e[0m \e[1mError L$LINENO:\e[0m $BASH_COMMAND\\e[0m" >&2' ERR
 
-sect() { echo -e "\n\e[1;32m==>\e[0m \e[1m$1\e[0m"; }
+sect() { echo -e "\e[1;32m==>\e[0m \e[1m$1\e[0m"; }
 eror() { echo -e "\e[1;31m!!>\e[0m \e[1m$1\e[0m"; }
 warn() { echo -e "\e[1;33m-->\e[0m \e[1m$1\e[0m"; }
 info() { echo -e "\e[1;35m ->\e[0m \e[1m$1\e[0m"; }
@@ -72,30 +73,20 @@ info() { echo -e "\e[1;35m ->\e[0m \e[1m$1\e[0m"; }
 sect "Adding ssh key..."
 eval "$(ssh-agent -s)"
 ssh-add "$HOME/.ssh/aur" # prompt for ssh keys with password
-
+echo
 cd ..
 
-sect "hii!"
-
 # Iterate in folders that has PKGBUILD and is not `aur-update` folder
-find . -type f -name "PKGBUILD" | while read -r pkgbuild; do
+while IFS= read -r pkgbuild; do
+    dir=$(dirname "$pkgbuild")
     if [ "$dir" == "aur-update" ]; then
         continue
     fi
+    echo "Processing $dir..."
 
-    # Extract the repo from PKGBUILD
-    url_line=$(grep '^url=' "$pkgbuild")
-    repo=$(echo "$url_line" | grep -oP 'github\.com/\K[^/]+/[^/.]+')
-
-    # Fetch the latest version number from GitHub API
-    sect "Fetch the latest version number from $repo..."
-    latest_release=$(curl -s "https://api.github.com/repos/$repo/releases/latest")
-    pkgver=$(echo "$latest_release" | grep -oP '"tag_name": "\K(.*)(?=")')
-    if [[ -z "$pkgver" ]]; then
-        eror "Failed to get latest version for $dir ($repo)"
-        continue
-    fi
-    info "$pkgver"
+    # Extract the url and pkgver from PKGBUILD
+    repo=$(grep -E '^url=' "$pkgbuild" | cut -d= -f2 | grep -oP 'github\.com/\K[^"]+')
+    pkgver=$(grep -E '^pkgver=' "$pkgbuild" | cut -d= -f2)
 
     # Extract info about source section in PKGBUILD
     mapfile -t sources < <(awk '/^source=\(/,/^\)/' "$pkgbuild" | grep '"')
@@ -119,20 +110,52 @@ find . -type f -name "PKGBUILD" | while read -r pkgbuild; do
     done
 
 
-    dir=$(dirname "$pkgbuild")
-    sect "Processing $dir..."
+#   █████  █████               █████            █████            
+#  ░░███  ░░███               ░░███            ░░███             
+#   ░███   ░███  ████████   ███████   ██████   ███████    ██████ 
+#   ░███   ░███ ░░███░░███ ███░░███  ░░░░░███ ░░░███░    ███░░███
+#   ░███   ░███  ░███ ░███░███ ░███   ███████   ░███    ░███████ 
+#   ░███   ░███  ░███ ░███░███ ░███  ███░░███   ░███ ███░███░░░  
+#   ░░████████   ░███████ ░░████████░░████████  ░░█████ ░░██████ 
+#    ░░░░░░░░    ░███░░░   ░░░░░░░░  ░░░░░░░░    ░░░░░   ░░░░░░  
+#                ░███                                            
+#                █████                                           
+#               ░░░░░
+# Check for release. If there is, proceed to update
 
-  #
-  #   ███████████  ███  ████
-  #  ░░███░░░░░░█ ░░░  ░░███
-  #   ░███   █ ░  ████  ░███   ██████   █████
-  #   ░███████   ░░███  ░███  ███░░███ ███░░
-  #   ░███░░░█    ░███  ░███ ░███████ ░░█████
-  #   ░███  ░     ░███  ░███ ░███░░░   ░░░░███
-  #   █████       █████ █████░░██████  ██████
-  #  ░░░░░       ░░░░░ ░░░░░  ░░░░░░  ░░░░░░
-  #
-  # Downloads files from releases
+    sect "Checking $repo for updates for $dir.."
+
+    # Variables specific to the repository
+    API_URL="https://api.github.com/repos/$repo/releases/latest"
+
+    # Fetch the latest release version from GitHub
+    latest_version=$(curl -s "$API_URL" | grep -oP '"tag_name":\s*"\K[^"]+')
+    latest_version=${latest_version#v}
+
+    # Check if the version was fetched
+    if [ -z "$latest_version" ]; then
+        eror "Could not fetch the release version from GitHub."
+        continue
+    fi
+
+    # Compare versions
+    if [ "$pkgver" == "$latest_version" ]; then
+        info "Repo is up-to-date. Latest release: $latest_version"
+        continue
+    else
+        info "Update needed! Repo version: $pkgver, Latest release: $latest_version"
+    fi
+
+#   ██████████                                      
+#  ░░███░░░░███                                     
+#   ░███   ░░███  ██████  █████ ███ █████ ████████  
+#   ░███    ░███ ███░░███░░███ ░███░░███ ░░███░░███ 
+#   ░███    ░███░███ ░███ ░███ ░███ ░███  ░███ ░███ 
+#   ░███    ███ ░███ ░███ ░░███████████   ░███ ░███ 
+#   ██████████  ░░██████   ░░████░████    ████ █████
+#  ░░░░░░░░░░    ░░░░░░     ░░░░ ░░░░    ░░░░ ░░░░░
+#
+# Downloads files from releases
 
     sect "Downloading binaries from Github releases..."
     curl -L "${bin_url}" -o "${dir}"
@@ -199,7 +222,7 @@ find . -type f -name "PKGBUILD" | while read -r pkgbuild; do
 # Updates the version of software
 
     sect "Updating version number..."
-    sed -i -E "s/^pkgver=.*/pkgver=${pkgver}/" "$pkgbuild"
+    sed -i -E "s/^pkgver=.*/pkgver=${latest_version}/" "$pkgbuild"
     # Print updated line for confirmation
     line=$(grep "^pkgver=" "$pkgbuild")
     info "$line"
@@ -233,8 +256,8 @@ find . -type f -name "PKGBUILD" | while read -r pkgbuild; do
     sect "Pushing..."
     cd "${dir}"
     git add .
-    git commit -m 'Update to latest version :3'
+    git commit -m "Update to version ${latest_version} :3"
     git push
     cd ..
 
-done
+done < <(find . -type f -name "PKGBUILD")
