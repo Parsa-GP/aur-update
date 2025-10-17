@@ -11,7 +11,6 @@
 #                                                          ░███
 #                                                          █████
 #                                                         ░░░░░
-# For updating your package, you should run this script.
 # 
 # The folder structure should look something like this:
 # ➜ tree                                                       
@@ -35,58 +34,93 @@
 #     ├── LICENSE
 #     └── update
 # 
-# Hash Section:
-# 1. Getting sha256 sum of downloaded binaries.
+# How does it work?
+# - Finding how to download binary
+#       It finds the url of the binary (for downloading it) with this regex:
+#     *"https://github.com/$repo/releases/download/"*
+#     (searches for the line that has the github download url)
+# - Getting sha256 sum of downloaded binaries
 #       it does so by finding any text that is in `source=(...)` section
-#     that starts with `"` till `::`, so getting the binary name from
-#     the source section. so make sure to name the downloaded binary:
+#     has `"` and `::`, so getting the binary name from the source section.
+#     so make sure to name the downloaded binary:
 #     ---- WRONG
 #     > source=(
 #     >     "https://github.com/REPO/releases/download/v${pkgver}/BINARYNAME"
 #     > )
 #     ---- correct
 #     > source=(
-#     >     "CustomBinaryName::https://github.com/REPOr/releases/download/v${pkgver}/BINARYNAME"
+#     >     "CustomBinaryName::https://github.com/REPO/releases/download/v${pkgver}/BINARYNAME"
 #     > )
-# 2. Replacing old hash with the hash of downloaded binaries
+# - Replacing old hash with the hash of downloaded binaries
 #       it finds how offseted the binary line in `source=(...)` section is,
 #     finds the `sha256sums=(` line and apply that offset to line number
 #     of founded line.
 #       so if `sha256sums=(` is in line 17, and the binary url is in 2nd
 #     line in source=() section, then the location of the binary hash
 #     should be in line 19.
-#       so there shouldn't be any newline between hashes in `sha256sums=(...)`
-#     section.
+#       so keep in mind that there shouldn't be any newline between hashes in
+#     `sha256sums=(...)` section.
 #
 
+set -euo pipefail
 
-
-succ() { echo -e "\e[1;32m==>\e[0m \e[1m$1\e[0m"; }
+sect() { echo -e "\n\e[1;32m==>\e[0m \e[1m$1\e[0m"; }
 eror() { echo -e "\e[1;31m!!>\e[0m \e[1m$1\e[0m"; }
 warn() { echo -e "\e[1;33m-->\e[0m \e[1m$1\e[0m"; }
 info() { echo -e "\e[1;35m ->\e[0m \e[1m$1\e[0m"; }
 
-set -euo pipefail
+sect "Adding ssh key..."
+eval "$(ssh-agent -s)"
+ssh-add "$HOME/.ssh/aur" # prompt for ssh keys with password
 
 cd ..
 
+sect "hii!"
 
-
-eror "hii"
-# Fetch the latest version number from GitHub API
-latest_release=$(curl -s https://api.github.com/repos/kabiiQ/BeatmapExporter/releases/latest)
-pkgver=$(echo "$latest_release" | grep -oP '"tag_name": "\K(.*)(?=")')
-
-base_url="https://github.com/kabiiQ/BeatmapExporter/releases/download/${pkgver}"
-
-
+# Iterate in folders that has PKGBUILD and is not `aur-update` folder
 find . -type f -name "PKGBUILD" | while read -r pkgbuild; do
-    dir=$(dirname "$pkgbuild")
-    echo "Processing: $dir"
-
     if [ "$dir" == "aur-update" ]; then
         continue
     fi
+
+    # Extract the repo from PKGBUILD
+    url_line=$(grep '^url=' "$pkgbuild")
+    repo=$(echo "$url_line" | grep -oP 'github\.com/\K[^/]+/[^/.]+')
+
+    # Fetch the latest version number from GitHub API
+    sect "Fetch the latest version number from $repo..."
+    latest_release=$(curl -s "https://api.github.com/repos/$repo/releases/latest")
+    pkgver=$(echo "$latest_release" | grep -oP '"tag_name": "\K(.*)(?=")')
+    if [[ -z "$pkgver" ]]; then
+        eror "Failed to get latest version for $dir ($repo)"
+        continue
+    fi
+    info "$pkgver"
+
+    # Extract info about source section in PKGBUILD
+    mapfile -t sources < <(awk '/^source=\(/,/^\)/' "$pkgbuild" | grep '"')
+    if [[ ${#sources[@]} -eq 0 ]]; then
+        eror "No sources found in $pkgbuild"
+        continue
+    fi
+    
+    bin_index=-1
+    bin_name=""
+    for i in "${!sources[@]}"; do
+        if [[ ${sources[$i]} == *"https://github.com/$repo/releases/download/"* ]]; then
+            bin_index=$i
+            pattern="\"([^\"]+)::([^\"]+)\""
+            if [[ ${sources[$i]} =~ $pattern ]]; then
+                bin_name="${BASH_REMATCH[1]}"
+                bin_url="${BASH_REMATCH[2]}"
+            fi
+            break
+        fi
+    done
+
+
+    dir=$(dirname "$pkgbuild")
+    sect "Processing $dir..."
 
   #
   #   ███████████  ███  ████
@@ -99,9 +133,10 @@ find . -type f -name "PKGBUILD" | while read -r pkgbuild; do
   #  ░░░░░       ░░░░░ ░░░░░  ░░░░░░  ░░░░░░
   #
   # Downloads files from releases
-    echo "Downloading for $dir..."
-    curl -L "${base_url}/linux-BeatmapExporterCLI" -o "${dir}"
-    echo "Files downloaded in $dir."
+
+    sect "Downloading binaries from Github releases..."
+    curl -L "${bin_url}" -o "${dir}"
+    info "Files downloaded."
 
 #
 #   █████   █████                   █████
@@ -115,57 +150,33 @@ find . -type f -name "PKGBUILD" | while read -r pkgbuild; do
 #
 # Calculates hash and puts it in PKGBUILD
 
-    dir=$(dirname "$pkgbuild")
-    echo "Processing: $dir"
-
-    # --- Extract all sources ---
-    mapfile -t sources < <(awk '/^source=\(/,/^\)/' "$pkgbuild" | grep '"')
-
-    if [[ ${#sources[@]} -eq 0 ]]; then
-        echo "No sources found in $pkgbuild"
-        continue
-    fi
-
-    # Find the index and name for the GitHub BeatmapExporter binary source
-    bin_index=-1
-    bin_name=""
-    for i in "${!sources[@]}"; do
-        if [[ ${sources[$i]} == *"https://github.com/kabiiQ/BeatmapExporter/releases/download/"* ]]; then
-            bin_index=$i
-            if [[ ${sources[$i]} =~ \"([^\"]+)::https:\/\/github\.com\/kabiiQ\/BeatmapExporter ]]; then
-                bin_name="${BASH_REMATCH[1]}"
-            fi
-            break
-        fi
-    done
-
     if [[ $bin_index -eq -1 || -z "$bin_name" ]]; then
-        echo "No GitHub BeatmapExporter binary source found in $pkgbuild"
+        eror "No binary source found in $pkgbuild"
         continue
     fi
 
-    echo "Found binary source: $bin_name (index $bin_index)"
+    info "Found binary source: $bin_name (index $bin_index)"
 
     # Check for matching file
     file_path="$dir/$bin_name"
     if [[ ! -f "$file_path" ]]; then
-        echo "File not found: $file_path"
+        eror "File not found: $file_path"
         continue
     fi
 
     sha256=$(sha256sum "$file_path" | awk '{print $1}')
-    echo "Computed sha256sum: $sha256"
+    info "Computed sha256sum: $sha256"
 
     # --- Locate the line number of sha256sums=( ---
     sha_line=$(grep -n '^sha256sums=(' "$pkgbuild" | cut -d: -f1)
     if [[ -z "$sha_line" ]]; then
-        echo "sha256sums=() not found in $pkgbuild"
+        eror "sha256sums=() not found in $pkgbuild"
         continue
     fi
 
     # The line to replace is: sha_line + bin_index + 1 (because arrays are zero-indexed)
     target_line=$((sha_line + bin_index + 1))
-    echo "Replacing line $target_line with computed hash"
+    info "Replacing line $target_line with computed hash"
 
     # Escape forward slashes for sed
     esc_hash=$(printf '%s\n' "$sha256" | sed 's/[\/&]/\\&/g')
@@ -173,8 +184,7 @@ find . -type f -name "PKGBUILD" | while read -r pkgbuild; do
     # Replace the line in-place
     sed -i "${target_line}s/.*/    \"$esc_hash\"/" "$pkgbuild"
 
-    echo "Updated sha256sums for $pkgbuild"
-    echo
+    info "Updated sha256sums for $pkgbuild"
     
 #
 #   █████   █████
@@ -188,14 +198,11 @@ find . -type f -name "PKGBUILD" | while read -r pkgbuild; do
 #
 # Updates the version of software
 
-    if [[ -z "$pkgver" ]]; then
-        echo "[EROR] Failed to get latest version for $dir"
-        continue
-    fi
-    # Replace pkgver line in PKGBUILD
+    sect "Updating version number..."
     sed -i -E "s/^pkgver=.*/pkgver=${pkgver}/" "$pkgbuild"
     # Print updated line for confirmation
-    grep "^pkgver=" "$pkgbuild"
+    line=$(grep "^pkgver=" "$pkgbuild")
+    info "$line"
 
 #
 #    █████████  █████ ██████   █████ ███████████    ███████
@@ -207,50 +214,27 @@ find . -type f -name "PKGBUILD" | while read -r pkgbuild; do
 #  ░░█████████  █████ █████  ░░█████ █████       ░░░███████░
 #   ░░░░░░░░░  ░░░░░ ░░░░░    ░░░░░ ░░░░░          ░░░░░░░
 #
-    # Updates SRCINFO to update SRCINFO
-    cd beatmapexporter-bin || exit
-    echo Updating beatmapexporter-bin...
-    makepkg --printsrcinfo > .SRCINFO
-    cd ..
-    cd beatmapexporter-cli-bin || exit
-    echo Updating beatmapexporter-cli-bin...
-    makepkg --printsrcinfo > .SRCINFO
-    echo Done!
+# Updates SRCINFO to update SRCINFO
 
-#
-#   ███████████
-#  ░░███░░░░░███
-#   ░███    ░███   ██████  ████████   ██████
-#   ░██████████   ███░░███░░███░░███ ███░░███
-#   ░███░░░░░███ ░███████  ░███ ░███░███ ░███
-#   ░███    ░███ ░███░░░   ░███ ░███░███ ░███
-#   █████   █████░░██████  ░███████ ░░██████
-#  ░░░░░   ░░░░░  ░░░░░░   ░███░░░   ░░░░░░
-#                          ░███
-#                          █████
-#                         ░░░░░
+    sect Updating srcinfo...
+    makepkg --printsrcinfo > .SRCINFO
+
+#   ███████████                     █████     
+#  ░░███░░░░░███                   ░░███      
+#   ░███    ░███ █████ ████  █████  ░███████  
+#   ░██████████ ░░███ ░███  ███░░   ░███░░███ 
+#   ░███░░░░░░   ░███ ░███ ░░█████  ░███ ░███ 
+#   ░███         ░███ ░███  ░░░░███ ░███ ░███ 
+#   █████        ░░████████ ██████  ████ █████
+#  ░░░░░          ░░░░░░░░ ░░░░░░  ░░░░ ░░░░░
 #
 # Pushes the changes to aur
 
-    # Directories
-    beatmapexporter_dir="beatmapexporter-bin"
-    beatmapexporter_cli_dir="beatmapexporter-cli-bin"
-
-    eval "$(ssh-agent -s)"
-    ssh-add "$HOME/.ssh/aur"
-
-    echo "[INFO] pushing beatmapexporter-bin..."
-    cd "${beatmapexporter_dir}"
+    sect "Pushing..."
+    cd "${dir}"
     git add .
     git commit -m 'Update to latest version :3'
     git push
-
-    echo "[INFO] pushing beatmapexporter-cli-bin..."
-    cd "../${beatmapexporter_cli_dir}"
-    git add .
-    git commit -m 'Update to latest version :3'
-    git push
-
-    echo "All repos pushed."
+    cd ..
 
 done
