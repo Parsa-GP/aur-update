@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+#
+#    This script essentially does these things:
+#
+# 1. Getting sha256 sum of downloaded binaries.
+#       it does so by finding any text that is in `source=(...)` section
+#     that starts with `"` till `::`, so getting the binary name from
+#     the source section. so make sure to name the downloaded binary:
+#     ---- WRONG
+#     > source=(
+#     >     "https://github.com/REPO/releases/download/v${pkgver}/BINARYNAME"
+#     > )
+#     ---- correct
+#     > source=(
+#     >     "CustomBinaryName::https://github.com/REPOr/releases/download/v${pkgver}/BINARYNAME"
+#     > )
+#     
+#
+# 2. Replacing old hash with the hash of downloaded binaries
+#       it finds how offseted the binary line in `source=(...)` section is,
+#     finds the `sha256sums=(` line and apply that offset to line number
+#     of founded line.
+#       so if `sha256sums=(` is in line 17, and the binary url is in 2nd
+#     line in source=() section, then the location of the binary hash
+#     should be in line 19.
+#       so there shouldn't be any newline between hashes in `sha256sums=(...)`
+#     section.
+#
+
+set -euo pipefail
+
+find . -type f -name "PKGBUILD" | while read -r pkgbuild; do
+    dir=$(dirname "$pkgbuild")
+    echo "Processing: $dir"
+
+    # --- Extract all sources ---
+    mapfile -t sources < <(awk '/^source=\(/,/^\)/' "$pkgbuild" | grep '"')
+
+    if [[ ${#sources[@]} -eq 0 ]]; then
+        echo "No sources found in $pkgbuild"
+        continue
+    fi
+
+    # Find the index and name for the GitHub BeatmapExporter binary source
+    bin_index=-1
+    bin_name=""
+    for i in "${!sources[@]}"; do
+        if [[ ${sources[$i]} == *"https://github.com/kabiiQ/BeatmapExporter/releases/download/"* ]]; then
+            bin_index=$i
+            if [[ ${sources[$i]} =~ \"([^\"]+)::https:\/\/github\.com\/kabiiQ\/BeatmapExporter ]]; then
+                bin_name="${BASH_REMATCH[1]}"
+            fi
+            break
+        fi
+    done
+
+    if [[ $bin_index -eq -1 || -z "$bin_name" ]]; then
+        echo "No GitHub BeatmapExporter binary source found in $pkgbuild"
+        continue
+    fi
+
+    echo "Found binary source: $bin_name (index $bin_index)"
+
+    # Check for matching file
+    file_path="$dir/$bin_name"
+    if [[ ! -f "$file_path" ]]; then
+        echo "File not found: $file_path"
+        continue
+    fi
+
+    sha256=$(sha256sum "$file_path" | awk '{print $1}')
+    echo "Computed sha256sum: $sha256"
+
+    # --- Locate the line number of sha256sums=( ---
+    sha_line=$(grep -n '^sha256sums=(' "$pkgbuild" | cut -d: -f1)
+    if [[ -z "$sha_line" ]]; then
+        echo "sha256sums=() not found in $pkgbuild"
+        continue
+    fi
+
+    # The line to replace is: sha_line + bin_index + 1 (because arrays are zero-indexed)
+    target_line=$((sha_line + bin_index + 1))
+    echo "Replacing line $target_line with computed hash"
+
+    # Escape forward slashes for sed
+    esc_hash=$(printf '%s\n' "$sha256" | sed 's/[\/&]/\\&/g')
+
+    # Replace the line in-place
+    sed -i "${target_line}s/.*/    \"$esc_hash\"/" "$pkgbuild"
+
+    echo "Updated sha256sums for $pkgbuild"
+    echo
+done

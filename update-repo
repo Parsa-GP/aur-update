@@ -1,0 +1,22 @@
+#!/bin/bash
+
+# Directories
+beatmapexporter_dir="beatmapexporter-bin"
+beatmapexporter_cli_dir="beatmapexporter-cli-bin"
+
+eval "$(ssh-agent -s)"
+ssh-add "$HOME/.ssh/aur"
+
+echo "[INFO] pushing beatmapexporter-bin..."
+cd "${beatmapexporter_dir}"
+git add .
+git commit -m 'Update to latest version :3'
+git push
+
+echo "[INFO] pushing beatmapexporter-cli-bin..."
+cd "../${beatmapexporter_cli_dir}"
+git add .
+git commit -m 'Update to latest version :3'
+git push
+
+echo "All repos pushed."

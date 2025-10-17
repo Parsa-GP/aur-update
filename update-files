@@ -1,0 +1,20 @@
+#!/bin/bash
+
+eror "hii"
+# Fetch the latest version number from GitHub API
+latest_release=$(curl -s https://api.github.com/repos/kabiiQ/BeatmapExporter/releases/latest)
+pkgver=$(echo "$latest_release" | grep -oP '"tag_name": "\K(.*)(?=")')
+
+base_url="https://github.com/kabiiQ/BeatmapExporter/releases/download/${pkgver}"
+
+# Loop over directories
+for dir in */; do
+    dir=${dir%/}  # remove trailing slash
+    if [ "$dir" != "aur-update" ]; then
+        echo "Downloading for $dir..."
+
+        curl -L "${base_url}/linux-BeatmapExporterCLI" -o "${dir}"
+
+        echo "Files downloaded in $dir."
+    fi
+done

@@ -1,0 +1,9 @@
+#!/bin/sh
+cd beatmapexporter-bin || exit
+echo Updating beatmapexporter-bin...
+makepkg --printsrcinfo > .SRCINFO
+cd ..
+cd beatmapexporter-cli-bin || exit
+echo Updating beatmapexporter-cli-bin...
+makepkg --printsrcinfo > .SRCINFO
+echo Done!
